@@ -1,0 +1,147 @@
+"use client";
+import { useEffect, useState } from 'react';
+
+interface RegisteredModel {
+  id: string;
+  name: string;
+  provider: string;
+  endpoint: string;
+  model?: string;
+  createdAt: string;
+  lastProbeAt?: string;
+  lastRiskSummary?: {
+    riskLevel: string;
+    highRiskFindings: number;
+    totalFindings: number;
+  };
+}
+
+export default function ModelsPage() {
+  const [models, setModels] = useState<RegisteredModel[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [registerData, setRegisterData] = useState({ name: '', endpoint: '', provider: 'custom', model: '', apiKey: '' });
+  const [probeResult, setProbeResult] = useState<any>(null);
+  const [probingModelId, setProbingModelId] = useState<string | null>(null);
+  const [error, setError] = useState<string>('');
+
+  const fetchModels = async () => {
+    const res = await fetch('/api/models/list');
+    const json = await res.json();
+    setModels(json.models || []);
+  };
+
+  useEffect(() => { fetchModels(); }, []);
+
+  const registerModel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!registerData.name || !registerData.endpoint) {
+      setError('Name and endpoint are required');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch('/api/models/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(registerData)
+      });
+      const json = await res.json();
+      if (json.error) setError(json.error); else {
+        setRegisterData({ name: '', endpoint: '', provider: 'custom', model: '', apiKey: '' });
+        await fetchModels();
+        if (json.initialProbe) setProbeResult(json.initialProbe);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const probeModel = async (id: string) => {
+    setProbingModelId(id);
+    setProbeResult(null);
+    try {
+      const res = await fetch('/api/model-probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId: id })
+      });
+      const json = await res.json();
+      setProbeResult(json.probe);
+      await fetchModels();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setProbingModelId(null);
+    }
+  };
+
+  return (
+    <div style={{ padding: '2rem', maxWidth: 960, margin: '0 auto' }}>
+      <h1>Untrusted Model Registry & Probing</h1>
+      <p>Register an external AI model endpoint (e.g. custom inference server or OpenAI-compatible API) and run automated security probes using DAN 12.0 adversarial variants.</p>
+
+      <form onSubmit={registerModel} style={{ marginBottom: '1.5rem', border: '1px solid #333', padding: '1rem', borderRadius: 8 }}>
+        <h2>Register Model</h2>
+        {error && <div style={{ color: 'red', marginBottom: 8 }}>{error}</div>}
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+          <input placeholder="Name" value={registerData.name} onChange={e=>setRegisterData(d=>({...d,name:e.target.value}))} />
+          <input placeholder="Endpoint URL" value={registerData.endpoint} onChange={e=>setRegisterData(d=>({...d,endpoint:e.target.value}))} style={{ flex: 1 }} />
+          <input placeholder="Provider (custom/openai-compatible)" value={registerData.provider} onChange={e=>setRegisterData(d=>({...d,provider:e.target.value}))} />
+          <input placeholder="Model (if provider needs)" value={registerData.model} onChange={e=>setRegisterData(d=>({...d,model:e.target.value}))} />
+          <input placeholder="API Key (stored in-memory only)" value={registerData.apiKey} onChange={e=>setRegisterData(d=>({...d,apiKey:e.target.value}))} />
+        </div>
+        <button type="submit" disabled={loading} style={{ marginTop: '1rem' }}>{loading ? 'Registering...' : 'Register Model'}</button>
+        <p style={{ fontSize: '0.75rem', opacity: 0.6, marginTop: '0.5rem' }}>Note: Key retained only in server memory for live probing; refresh/restart will purge it. Avoid production secrets here.</p>
+      </form>
+
+      <h2>Registered Models</h2>
+      {models.length === 0 && <p>No models registered yet.</p>}
+      <ul style={{ listStyle: 'none', padding: 0 }}>
+        {models.map(m => (
+          <li key={m.id} style={{ border: '1px solid #222', marginBottom: '1rem', padding: '0.75rem', borderRadius: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong>{m.name}</strong>
+              <button onClick={()=>probeModel(m.id)} disabled={!!probingModelId}>
+                {probingModelId === m.id ? 'Probing...' : 'Run Probe'}
+              </button>
+            </div>
+            <div style={{ fontSize: '0.85rem', opacity: 0.8 }}>{m.endpoint}</div>
+            <div style={{ marginTop: 4 }}>Provider: {m.provider} {m.model && `(model: ${m.model})`}</div>
+            <div>Risk: {m.lastRiskSummary?.riskLevel || 'UNKNOWN'} (findings: {m.lastRiskSummary?.totalFindings || 0}, high-risk: {m.lastRiskSummary?.highRiskFindings || 0})</div>
+            {m.lastProbeAt && <div>Last Probe: {new Date(m.lastProbeAt).toLocaleString()}</div>}
+          </li>
+        ))}
+      </ul>
+
+      {probeResult && (
+        <div style={{ marginTop: '2rem', border: '1px solid #444', padding: '1rem', borderRadius: 8 }}>
+          <h2>Probe Result</h2>
+          <p><strong>Model:</strong> {probeResult.modelName}</p>
+          <p><strong>Probes:</strong> {probeResult.totalProbes} | Failed Policy Checks: {probeResult.failedPolicyChecks}</p>
+          <p><strong>Risk:</strong> High: {probeResult.highRiskFindings} | Critical: {probeResult.criticalFindings}</p>
+          <details>
+            <summary>View Analyses</summary>
+            {probeResult.analyses.map((a: any) => (
+              <div key={a.id} style={{ borderTop: '1px solid #333', paddingTop: '0.5rem', marginTop: '0.5rem' }}>
+                <div><strong>Risk:</strong> {a.riskLevel} (confidence {Math.round(a.confidence*100)}%)</div>
+                <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>Prompt: {a.promptId}</div>
+                {a.detectedViolations.length > 0 ? (
+                  <ul style={{ margin: '0.5rem 0', paddingLeft: '1.2rem' }}>
+                    {a.detectedViolations.map((v: any) => (
+                      <li key={v.policyId + v.ruleViolated}>{v.ruleViolated} - {v.severity} ({Math.round(v.confidence*100)}%)</li>
+                    ))}
+                  </ul>
+                ) : <div>No violations</div>}
+                <details>
+                  <summary>Reasoning</summary>
+                  <pre style={{ whiteSpace: 'pre-wrap' }}>{a.reasoning}</pre>
+                </details>
+              </div>
+            ))}
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}
