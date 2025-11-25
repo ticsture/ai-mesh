@@ -13,20 +13,39 @@ export interface GroqMessage {
 }
 
 export class GroqService {
-  static async chat(messages: GroqMessage[]): Promise<string> {
-    try {
-      const completion = await groq.chat.completions.create({
-        messages,
-        model: GROQ_MODEL,
-        temperature: 0.7,
-        max_tokens: 4000,
-      });
+  static async chat(messages: GroqMessage[], retries: number = 3): Promise<string> {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const completion = await groq.chat.completions.create({
+          messages,
+          model: GROQ_MODEL,
+          temperature: 0.7,
+          max_tokens: 2000,
+        });
 
-      return completion.choices[0]?.message?.content || '';
-    } catch (error) {
-      console.error('Groq API error:', error);
-      throw new Error('Failed to generate AI response');
+        return completion.choices[0]?.message?.content || '';
+      } catch (error: any) {
+        // Handle rate limits with exponential backoff
+        if (error?.status === 429 && i < retries - 1) {
+          const waitTime = Math.pow(2, i) * 1000; // 1s, 2s, 4s
+          console.log(`⏳ Rate limited, waiting ${waitTime}ms before retry ${i + 1}/${retries}`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+        console.error('Groq API error:', error);
+        throw new Error('Failed to generate AI response');
+      }
     }
+    throw new Error('All retries exhausted');
+  }
+
+  // Helper to clean JSON from markdown code blocks
+  private static cleanJSON(text: string): string {
+    // Remove markdown code blocks
+    text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    // Remove leading/trailing whitespace
+    text = text.trim();
+    return text;
   }
 
   static async generateThreatAnalysis(threatDescription: string): Promise<{
@@ -39,24 +58,29 @@ export class GroqService {
     const messages: GroqMessage[] = [
       {
         role: 'system',
-        content: `You are an advanced AI security analyst. Analyze the provided threat and return a JSON response with:
-        - severity: "low", "medium", or "high"
-        - confidence: number between 0-100
-        - analysis: detailed analysis of the threat
-        - indicators: array of threat indicators to watch for
-        - countermeasures: array of specific countermeasures
-        
-        Respond only with valid JSON.`
+        content: `You are an advanced AI security analyst. Analyze the provided threat and return ONLY a raw JSON response (no markdown, no code blocks).
+
+Return this exact structure:
+{
+  "severity": "low" | "medium" | "high",
+  "confidence": 0-100,
+  "analysis": "detailed analysis string",
+  "indicators": ["indicator1", "indicator2"],
+  "countermeasures": ["countermeasure1", "countermeasure2"]
+}
+
+CRITICAL: Return ONLY the JSON object, nothing else. No explanations, no markdown formatting.`
       },
       {
         role: 'user',
-        content: `Analyze this AI security threat: ${threatDescription}`
+        content: `Analyze this AI security threat: ${threatDescription.slice(0, 300)}`
       }
     ];
 
     try {
       const response = await this.chat(messages);
-      return JSON.parse(response);
+      const cleaned = this.cleanJSON(response);
+      return JSON.parse(cleaned);
     } catch (error) {
       console.error('Threat analysis error:', error);
       return {
@@ -78,23 +102,28 @@ export class GroqService {
     const messages: GroqMessage[] = [
       {
         role: 'system',
-        content: `You are an AI security policy generator. Create specific security policies to counter threats. Return JSON with:
-        - policyName: descriptive name for the policy
-        - rules: array of specific security rules
-        - implementation: how to implement this policy
-        - effectiveness: predicted effectiveness score 0-100
-        
-        Respond only with valid JSON.`
+        content: `You are an AI security policy generator. Create specific security policies to counter threats. Return ONLY raw JSON (no markdown, no code blocks).
+
+Return this exact structure:
+{
+  "policyName": "descriptive policy name",
+  "rules": ["rule1", "rule2"],
+  "implementation": "how to implement",
+  "effectiveness": 0-100
+}
+
+CRITICAL: Return ONLY the JSON object, nothing else.`
       },
       {
         role: 'user',
-        content: `Generate security policy for: ${JSON.stringify(threatAnalysis)}`
+        content: `Generate security policy for: ${JSON.stringify(threatAnalysis).slice(0, 300)}`
       }
     ];
 
     try {
       const response = await this.chat(messages);
-      return JSON.parse(response);
+      const cleaned = this.cleanJSON(response);
+      return JSON.parse(cleaned);
     } catch (error) {
       console.error('Policy generation error:', error);
       return {
@@ -123,7 +152,8 @@ export class GroqService {
 
     try {
       const response = await this.chat(messages);
-      const prompts = JSON.parse(response);
+      const cleaned = this.cleanJSON(response);
+      const prompts = JSON.parse(cleaned);
       return Array.isArray(prompts) ? prompts : [];
     } catch (error) {
       console.error('Adversarial prompt generation error:', error);
@@ -165,7 +195,8 @@ export class GroqService {
 
     try {
       const analysisResult = await this.chat(messages);
-      return JSON.parse(analysisResult);
+      const cleaned = this.cleanJSON(analysisResult);
+      return JSON.parse(cleaned);
     } catch (error) {
       console.error('Response analysis error:', error);
       return {

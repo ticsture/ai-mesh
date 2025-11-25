@@ -38,49 +38,18 @@ class SecurityState {
     this.threatIntel = new ThreatIntelligenceEngine();
     this.policyGen = new AdaptivePolicyGenerator();
     this.probeEngine = new ModelProbeEngine();
-    // Continuous model probing every 10 minutes if models exist
-    setInterval(async () => {
-      const models = untrustedModelRegistry.list().filter(m => m.monitoringEnabled !== false);
-      if (models.length === 0) return;
-      const policies = this.getActivePolicies();
-      if (policies.length === 0) return;
-      // Only probe enabled models
-      for (const m of models) {
-        const probe = await this.probeEngine.probeModel(m.id, policies);
-        if (probe) {
-          this.probesRun += 1;
-          this.responsesBlocked += probe.failedPolicyChecks;
-          this.highRiskFindings += probe.highRiskFindings;
-          this.criticalFindings += probe.criticalFindings;
-          this.eventLog.push({
-            type: 'model_probed',
-            modelId: m.id,
-            totalPrompts: probe.totalProbes,
-            failedPolicyChecks: probe.failedPolicyChecks,
-            highRisk: probe.highRiskFindings,
-            critical: probe.criticalFindings,
-            timestamp: new Date()
-          });
-          probe.analyses.forEach(a => this.recordGuardianAnalysis(a));
-          // Update probe count
-          untrustedModelRegistry.update(m.id, { probeCount: (m.probeCount || 0) + 1 });
-        }
-      }
-    }, 10 * 60 * 1000);
+    // DISABLED: Model probing disabled to minimize AI usage
+    // Models are only probed on explicit user request via API
+    console.log('⚠️ Automatic model probing DISABLED to minimize AI API usage');
   }
 
   async refreshPolicies(threats: ThreatPattern[]) {
-    // Avoid regenerating too frequently (<60s)
+    // DISABLED: Skip AI policy generation to save API calls
+    // Policies are only generated on explicit user request
     const now = Date.now();
-    const unseen = threats.filter(t => !Array.from(this.policies.values()).some(p => p.threatIds.includes(t.id)));
-    if (unseen.length > 0 && (now - this.lastPolicyGeneration > 60_000)) {
-      const newPolicies = await this.policyGen.generatePoliciesFromThreats(unseen);
-      newPolicies.forEach(p => {
-        this.policies.set(p.id, p);
-        this.eventLog.push({ type: 'policy_generated', policy: p, timestamp: new Date() });
-      });
+    if (now - this.lastPolicyGeneration > 300_000) { // Only check every 5 minutes
       this.lastPolicyGeneration = now;
-      this.adaptations += newPolicies.length;
+      console.log('📋 Policy generation skipped (AI usage minimized)');
     }
   }
 
